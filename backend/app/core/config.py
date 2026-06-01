@@ -16,8 +16,7 @@ class Settings(BaseSettings):
 
     # LLM
     llm_api_key: str = ""
-    llm_api_base: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o"
+    llm_model: str = "deepseek-v4-pro"
 
     # 认证（false = 免登录模式）
     require_auth: bool = False

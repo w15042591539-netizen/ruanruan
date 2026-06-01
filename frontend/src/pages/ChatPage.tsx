@@ -1,76 +1,143 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import Live2DCanvas from "../live2d/Live2DCanvas";
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+}
+
+let ws: WebSocket | null = null;
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<string[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  const send = () => {
-    if (!input.trim()) return;
-    setMessages((prev) => [...prev, input]);
-    setInput("");
+  useEffect(() => {
+    connect();
+    return () => {
+      ws?.close();
+    };
+  }, []);
+
+  const connect = () => {
+    ws = new WebSocket("ws://localhost:8000/ws/chat");
+    ws.onopen = () => setConnected(true);
+    ws.onclose = () => {
+      setConnected(false);
+      setTimeout(connect, 3000);
+    };
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.type === "chat_chunk") {
+        setWaiting(false);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === "assistant") {
+            return [...prev.slice(0, -1), { ...last, content: last.content + data.content }];
+          }
+          return [...prev, { role: "assistant", content: data.content }];
+        });
+      } else if (data.type === "chat_complete") {
+        setWaiting(false);
+      }
+    };
   };
 
+  const send = useCallback(() => {
+    if (!input.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
+    setMessages((prev) => [...prev, { role: "user", content: input }]);
+    ws.send(JSON.stringify({ type: "chat", session_id: "1", content: input }));
+    setInput("");
+    setWaiting(true);
+  }, [input]);
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, waiting]);
+
   return (
-    <div className="h-screen flex bg-gray-900 text-white">
-      {/* 侧边栏 */}
-      <aside className="w-64 bg-gray-800 flex flex-col p-4 border-r border-gray-700">
-        <h2 className="text-lg font-bold mb-4">软软</h2>
-        <button className="w-full py-2 mb-4 rounded-lg bg-pink-500 hover:bg-pink-600 text-sm font-medium">
-          新建对话
-        </button>
-        <nav className="flex-1 space-y-1 overflow-y-auto">
-          <div className="py-2 px-3 rounded-lg bg-gray-700 text-sm cursor-pointer">默认对话</div>
-        </nav>
-      </aside>
+    <div className="h-screen relative overflow-hidden">
+      {/* Live2D 背景层 */}
+      <Live2DCanvas
+        modelPath="/models/hiyori_free_zh/runtime/hiyori_free_t08.model3.json"
+        className="absolute inset-0"
+      />
 
-      {/* 聊天区 */}
-      <div className="flex-1 flex flex-col">
-        {/* 顶部 */}
-        <header className="h-14 flex items-center px-6 border-b border-gray-700">
-          <span className="font-medium">小软</span>
-          <span className="ml-2 text-xs text-pink-400">❤ 80</span>
-        </header>
+      {/* 顶部状态栏 */}
+      <div className="absolute top-0 left-0 right-0 z-10 flex items-center px-6 py-3 pointer-events-none">
+        <span className="font-medium text-lg text-gray-800 bg-white/70 backdrop-blur-sm rounded-full px-4 py-1 shadow-sm">软软</span>
+        <span className={`ml-2 w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`} />
+      </div>
 
+      {/* 聊天悬浮层 - 下三分之一 */}
+      <div className="absolute bottom-0 left-0 right-0 z-10 flex flex-col pointer-events-none" style={{ height: "35%" }}>
         {/* 消息列表 */}
-        <main className="flex-1 overflow-y-auto p-6 space-y-4">
-          {messages.length === 0 && (
-            <p className="text-center text-gray-500 mt-20">
-              和你的 AI 女友开始聊天吧 💕
-            </p>
-          )}
+        <main ref={listRef} className="flex-1 overflow-y-auto px-4 py-2 space-y-3 scrollbar-none">
           {messages.map((msg, i) => (
-            <div key={i} className="flex justify-end">
-              <div className="max-w-xs px-4 py-2 rounded-2xl bg-pink-500">
-                {msg}
+            <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} pointer-events-auto`}>
+              <div className="flex items-start gap-2 max-w-md">
+                {msg.role === "assistant" && (
+                  <div className="w-7 h-7 rounded-full bg-white/80 backdrop-blur-sm flex items-center justify-center text-xs shrink-0 mt-1 shadow-sm">
+                    🤖
+                  </div>
+                )}
+                <div
+                  className={`px-4 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${
+                    msg.role === "user"
+                      ? "bg-blue-500/90 text-white rounded-br-md"
+                      : "bg-white/75 backdrop-blur-sm text-gray-800 rounded-bl-md"
+                  }`}
+                >
+                  {msg.content}
+                </div>
+                {msg.role === "user" && (
+                  <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-white text-xs shrink-0 mt-1 shadow-sm">
+                    U
+                  </div>
+                )}
               </div>
             </div>
           ))}
+          {waiting && (
+            <div className="flex justify-start pointer-events-auto">
+              <div className="flex items-start gap-2">
+                <div className="w-7 h-7 rounded-full bg-white/80 backdrop-blur-sm flex items-center justify-center text-xs shrink-0 shadow-sm">🤖</div>
+                <div className="px-4 py-2 rounded-2xl rounded-bl-md bg-white/75 backdrop-blur-sm shadow-sm">
+                  <span className="inline-flex gap-0.5">
+                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" />
+                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:0.1s]" />
+                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:0.2s]" />
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </main>
 
         {/* 输入区 */}
-        <footer className="p-4 border-t border-gray-700">
-          <div className="flex gap-2">
+        <footer className="shrink-0 px-4 pb-4 pointer-events-auto">
+          <div className="flex gap-2 items-end max-w-2xl mx-auto">
             <input
-              className="flex-1 px-4 py-2 rounded-xl bg-gray-800 border border-gray-600 focus:outline-none focus:border-pink-500"
-              placeholder="说点什么..."
+              className="flex-1 px-4 py-2.5 rounded-xl bg-white/75 backdrop-blur-sm border border-white/40 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 text-sm disabled:opacity-50 shadow-sm text-gray-800 placeholder:text-gray-400"
+              placeholder={connected ? "输入消息..." : "连接中..."}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
+              disabled={!connected}
             />
             <button
               onClick={send}
-              className="px-6 py-2 rounded-xl bg-pink-500 hover:bg-pink-600 font-medium"
+              disabled={!connected}
+              className="px-5 py-2.5 rounded-xl bg-blue-500/90 hover:bg-blue-600 disabled:opacity-50 text-white text-sm font-medium transition-colors backdrop-blur-sm shadow-sm"
             >
               发送
             </button>
           </div>
         </footer>
       </div>
-
-      {/* Live2D 占位区 */}
-      <aside className="w-80 bg-gray-950 flex items-center justify-center border-l border-gray-700">
-        <p className="text-gray-600 text-sm">Live2D 模型区域</p>
-      </aside>
     </div>
   );
 }
